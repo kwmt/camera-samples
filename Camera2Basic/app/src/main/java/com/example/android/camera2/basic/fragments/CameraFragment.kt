@@ -20,6 +20,10 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Color
 import android.graphics.ImageFormat
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
@@ -40,6 +44,7 @@ import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.View
 import android.view.ViewGroup
+import androidx.core.content.ContextCompat.getSystemService
 import androidx.core.graphics.drawable.toDrawable
 import androidx.exifinterface.media.ExifInterface
 import androidx.fragment.app.Fragment
@@ -72,6 +77,12 @@ import kotlin.coroutines.resumeWithException
 import kotlin.coroutines.suspendCoroutine
 
 class CameraFragment : Fragment() {
+
+    private var isInitializeCamera: Boolean = false
+    private var lightOn: Boolean = false
+
+    private lateinit var sensorManager: SensorManager
+    private var light: Sensor? = null
 
     /** Android ViewBinding */
     private var _fragmentCameraBinding: FragmentCameraBinding? = null
@@ -186,6 +197,33 @@ class CameraFragment : Fragment() {
                 Log.d(TAG, "Orientation changed: $orientation")
             })
         }
+
+        sensorManager = getSystemService(this.requireContext(), SensorManager::class.java)!!
+        light = sensorManager.getDefaultSensor(Sensor.TYPE_LIGHT)
+    }
+
+
+    private val sensorEventListener = object: SensorEventListener {
+        override fun onSensorChanged(event: SensorEvent?) {
+            val lux = event?.values?.get(0) ?: return
+            Log.d(TAG, "lux : $lux")
+            updateLight(lux < 10  && lux < 12)
+        }
+
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        light?.also { light ->
+            sensorManager.registerListener(sensorEventListener, light, SensorManager.SENSOR_DELAY_NORMAL)
+        }
+    }
+
+    override fun onPause() {
+        sensorManager.unregisterListener(sensorEventListener)
+        super.onPause()
     }
 
     /**
@@ -212,12 +250,8 @@ class CameraFragment : Fragment() {
         // Start a capture session using our open camera and list of Surfaces where frames will go
         session = createCaptureSession(camera, targets, cameraHandler)
 
-        val captureRequest = camera.createCaptureRequest(
-                CameraDevice.TEMPLATE_PREVIEW).apply { addTarget(fragmentCameraBinding.viewFinder.holder.surface) }
-
-        // This will keep sending the capture request as frequently as possible until the
-        // session is torn down or session.stopRepeating() is called
-        session.setRepeatingRequest(captureRequest.build(), null, cameraHandler)
+        isInitializeCamera = true
+        updateLight()
 
         // Listen to the capture button
         fragmentCameraBinding.captureButton.setOnClickListener {
@@ -257,6 +291,26 @@ class CameraFragment : Fragment() {
                 it.post { it.isEnabled = true }
             }
         }
+    }
+
+    private fun updateLight(lightOn: Boolean = false) {
+        if (!isInitializeCamera) {
+            return
+        }
+        val captureRequest = camera.createCaptureRequest(
+            CameraDevice.TEMPLATE_PREVIEW
+        ).apply { addTarget(fragmentCameraBinding.viewFinder.holder.surface) }
+
+        captureRequest.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+        if(lightOn) {
+            captureRequest.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH)
+        }else {
+            captureRequest.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
+        }
+
+        // This will keep sending the capture request as frequently as possible until the
+        // session is torn down or session.stopRepeating() is called
+        session.setRepeatingRequest(captureRequest.build(), null, cameraHandler)
     }
 
     /** Opens the camera and returns the opened device (as the result of the suspend coroutine) */
